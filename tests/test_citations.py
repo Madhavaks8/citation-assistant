@@ -138,6 +138,136 @@ class TestCitationEngine:
         assert "@misc{" in res_apa.bibtex_export
 
 
+class TestPhase2AAtomicExtraction:
+    """Dedicated tests for Phase 2A atomic claim extraction and query specificity."""
+
+    def test_atomic_claims_split(self):
+        """Test A: Compound sentences with separable factual assertions are decomposed into atomic claims."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        compound_text = "AI is used for personalized learning and automated grading in schools."
+        claims = extractor.extract_claims(compound_text)
+        
+        # Should produce 2 atomic claims
+        assert len(claims) == 2
+        claim_texts = [c.claim_text.lower() for c in claims]
+        assert any("personalized learning" in ct for ct in claim_texts)
+        assert any("automated grading" in ct or "grading" in ct for ct in claim_texts)
+
+    def test_connected_facts_remain_single_claim(self):
+        """Test B: Tightly connected facts describing a single mechanism remain one unified claim."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        connected_text = "Large language models are trained using self-supervised learning on large text datasets."
+        claims = extractor.extract_claims(connected_text)
+        
+        # Should remain 1 coherent claim
+        assert len(claims) == 1
+        assert "self-supervised learning" in claims[0].claim_text.lower()
+        assert "large text datasets" in claims[0].claim_text.lower()
+
+    def test_query_specificity(self):
+        """Test C: Generated search queries must preserve technical entities and not collapse to generic topics."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        text = "Large language models are trained using self-supervised learning on large text datasets."
+        claims = extractor.extract_claims(text)
+        assert len(claims) >= 1
+        claim = claims[0]
+        
+        # Verify queries contain technical terms
+        primary_q = claim.search_query.lower()
+        all_q_text = " ".join([q.lower() for q in claim.search_queries])
+        
+        # Must NOT be just a generic topic like "artificial intelligence"
+        assert primary_q != "artificial intelligence"
+        assert primary_q != "ai"
+        
+        # Must retain specific entities/mechanisms
+        assert "language" in all_q_text or "models" in all_q_text or "llm" in all_q_text
+        assert "self" in all_q_text or "supervised" in all_q_text or "trained" in all_q_text
+
+    def test_multiple_query_variants(self):
+        """Test D: Extractor must generate 2-3 distinct query variants per claim."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        text = "AI systems provide personalized learning experiences based on individual student needs."
+        claims = extractor.extract_claims(text)
+        assert len(claims) >= 1
+        claim = claims[0]
+        
+        # Check that 2-3 query variants are generated
+        assert len(claim.search_queries) >= 2
+        assert len(claim.search_queries) <= 3
+        # Check that variants are distinct strings
+        assert len(set(claim.search_queries)) == len(claim.search_queries)
+
+    def test_no_hallucinated_facts(self):
+        """Test E: Extracted claims must not invent facts absent from the input."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        original_text = "Quantum computing utilizes principles of quantum mechanics such as superposition."
+        claims = extractor.extract_claims(original_text)
+        assert len(claims) >= 1
+        for claim in claims:
+            # Check key keywords come directly from the source sentence
+            assert "quantum" in claim.claim_text.lower()
+            assert "superposition" in claim.claim_text.lower()
+
+
+class TestPhase2AProblematicExamples:
+    """Test the specific observed problematic examples from real test cases."""
+
+    def test_generative_ai_deep_neural_networks(self):
+        """Example 1: Generative AI deep neural networks multimedia claim."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        text = "Generative artificial intelligence utilizes deep neural networks to synthesize human-like text and multimedia."
+        claims = extractor.extract_claims(text)
+        assert len(claims) >= 1
+        claim = claims[0]
+        
+        # Queries must target deep neural networks and text/multimedia synthesis
+        combined_queries = " ".join([q.lower() for q in claim.search_queries])
+        assert "neural" in combined_queries or "generative" in combined_queries
+        assert "text" in combined_queries or "multimedia" in combined_queries or "synthesize" in combined_queries
+
+        # Ensure search engine returns precision sources
+        search_engine = SourceSearchEngine()
+        sources = search_engine.search_for_claim(claim.claim_id, claim.search_queries)
+        assert len(sources) >= 1
+        # The retrieved source must directly discuss deep generative models or synthesis
+        snippet_all = " ".join([s.snippet.lower() + " " + s.title.lower() for s in sources])
+        assert "generative" in snippet_all or "neural" in snippet_all
+
+    def test_personalized_learning_paths(self):
+        """Example 2: AI personalized learning paths education claim."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        text = "Artificial intelligence is transforming education by enabling personalized learning paths tailored to individual student speeds."
+        claims = extractor.extract_claims(text)
+        assert len(claims) >= 1
+        claim = claims[0]
+        
+        # Queries must target education, personalized learning, student speeds
+        combined_queries = " ".join([q.lower() for q in claim.search_queries])
+        assert "personalized" in combined_queries or "learning" in combined_queries
+        assert "education" in combined_queries or "student" in combined_queries
+
+        # Ensure search engine returns education sources (NOT healthcare)
+        search_engine = SourceSearchEngine()
+        sources = search_engine.search_for_claim(claim.claim_id, claim.search_queries)
+        assert len(sources) >= 1
+        snippet_all = " ".join([s.snippet.lower() + " " + s.title.lower() for s in sources])
+        assert "healthcare" not in sources[0].title.lower()
+        assert "education" in snippet_all or "learning" in snippet_all or "tutoring" in snippet_all
+
+    def test_llm_self_supervised_corpora(self):
+        """Example 3: LLM vast text corpora self-supervised learning claim."""
+        extractor = ClaimExtractor(llm_client=LLMClient(provider="mock"))
+        text = "Large language models are trained on vast corpora of text data using self-supervised learning techniques."
+        claims = extractor.extract_claims(text)
+        assert len(claims) >= 1
+        claim = claims[0]
+        
+        combined_queries = " ".join([q.lower() for q in claim.search_queries])
+        assert "self" in combined_queries or "supervised" in combined_queries
+        assert "corpora" in combined_queries or "text" in combined_queries or "models" in combined_queries
+
+
 class TestEndToEndPipeline:
     """Test full pipeline integration."""
 
@@ -151,3 +281,4 @@ class TestEndToEndPipeline:
         assert result.metrics.total_claims == len(result.claims)
         assert result.metrics.processing_time_seconds >= 0.0
         assert len(result.citation_result.cited_answer) > 0
+

@@ -104,8 +104,11 @@ class CitationAssistantPipeline:
             step_frac = 0.60 + (0.25 * (i / max(len(claims), 1)))
             update_progress(f"Verifying claim {i+1}/{len(claims)}: '{claim.claim_text[:40]}...' ", step_frac)
             
-            # Retrieve candidate sources
-            candidate_sources = self.search_engine.search_for_claim(claim.claim_id, claim.search_query)
+            # Retrieve candidate sources using precision multi-query search
+            candidate_sources = self.search_engine.search_for_claim(
+                claim.claim_id,
+                claim.search_queries if claim.search_queries else claim.search_query
+            )
             total_sources_count += len(candidate_sources)
 
             # Validate entailment
